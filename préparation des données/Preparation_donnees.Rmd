@@ -1,0 +1,476 @@
+---
+title: "Projet_DataViz_Préparation des données"
+author: "AMIEL Florian DJIBRIL OMAR Emma MOREL-LE GUYADER Julie WENDLING Solène"
+date: "2024-11-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Nous préparons/nettoyons les données dans ce code R en amont pour avoir un dashboard moins long à charger
+Ce Code génère 4 fichiers excel qui seront utilisés dans le dashboard
+
+```{r}
+
+
+#install.packages("rlang", dependencies = TRUE)
+library(data.table)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(leaflet)
+library(writexl)
+library(geosphere)  # Pour calculer les distances à partir lat. et long.
+library(stringr)
+library(readxl)
+
+
+```
+
+
+
+
+
+```{r}
+
+# Importation des données météo
+# df_synop<-fread("C:/Users/emmad/Documents/ISUP/M2/S1/DataViz/donnees-synop-essentielles-omm.csv")
+df_synop<-fread("C:/Users/djoul/Bureau/data_vis/données/2014_2023_donnees-synop-essentielles-omm.csv")
+
+```
+
+
+```{r}
+df_synop2<-df_synop[,c("ID OMM station" ,"Date", "Nom", "Latitude", "Longitude", "Altitude", "communes (name)", "communes (code)", "EPCI (name)", "EPCI (code)", "department (name)" , "department (code)", "region (name)", "region (code)", "Température (°C)"  )]
+```
+
+
+```{r}
+# Conversion de la colonne Date en format POSIXct
+df_synop2$Date <- as.POSIXct(df_synop2$Date, format = "%Y-%m-%d %H:%M:%S")
+
+# Création des colonnes annee, mois, jour et heure
+df_synop2$annee <- year(df_synop2$Date)
+df_synop2$mois <- month(df_synop2$Date)
+df_synop2$jour <- day(df_synop2$Date)
+df_synop2$heure <- hour(df_synop2$Date)
+
+# Filtrage sur les régions métropolitaines et suppression des NA
+regions_metropolitaines <- c(84, 27, 53, 24, 94, 44, 32, 11, 28, 75, 76, 52, 93)
+
+df_synop2 <- df_synop2 %>%
+  filter(
+    !is.na(`region (code)`),                # Retirer les NA dans 'region (code)'
+    `region (code)` %in% regions_metropolitaines  # Garder uniquement les régions métropolitaines
+  )
+
+# on ne garde que les mois mars avril mai
+df_synop2 <- df_synop2[df_synop2$mois %in% c(3, 4, 5), ]
+
+```
+
+```{r}
+# on conservant la température min pour chaque jour et on regroupe
+
+df_synop3 <- df_synop2 %>%
+  group_by(`ID OMM station`, annee, mois, jour) %>%
+  summarise(
+    temp_min = if (all(is.na(`Température (°C)`))) {
+      NA_real_
+    } else {
+      min(`Température (°C)`, na.rm = TRUE)
+    },
+    across(-`Température (°C)`, first), # Garde les autres colonnes
+    .groups = "drop"
+  )
+```
+
+```{r}
+# création data position stations météos
+# Garder une ligne unique pour chaque ID OMM station
+df_coord_stations <- df_synop3[, c("ID OMM station", "Nom", "Latitude", "Longitude", "region (code)")] %>%
+  distinct(`ID OMM station`, .keep_all = TRUE)
+
+```
+
+```{r}
+# création data températures min par station + nombre de jours gel 
+# Calcul du nombre de jours de gel (temp_min < 0) par station, mois et année
+df_jours_gel <- df_synop3 %>%
+  filter(temp_min < 0) %>%
+  group_by(`ID OMM station`, annee, mois) %>%
+  summarise(nb_jour_gel = n(), .groups = "drop")
+
+# Calcul de la température minimale par station, mois et année
+df_temp_min <- df_synop3 %>%
+  group_by(`ID OMM station`, annee, mois) %>%
+  summarise(temp_min = min(temp_min), .groups = "drop")
+
+# Fusionner les deux résultats avec les colonnes supplémentaires
+df_intensite_stations <- df_synop3 %>%
+  select(`ID OMM station`, Nom, Latitude, Longitude, `region (code)`, annee, mois) %>%
+  distinct() %>%
+  left_join(df_temp_min, by = c("ID OMM station", "annee", "mois")) %>%
+  left_join(df_jours_gel, by = c("ID OMM station", "annee", "mois")) %>%
+  mutate(nb_jour_gel = ifelse(is.na(nb_jour_gel), 0, nb_jour_gel)) # Remplacer les NA par 0 pour les jours sans gel
+
+```
+
+```{r}
+# Exporter data météo au format Excel
+
+write_xlsx(df_synop3, "C:/Users/djoul/Bureau/data_vis/données/data_degres.xlsx")
+write_xlsx(df_coord_stations, "C:/Users/djoul/Bureau/data_vis/données/data_coord_stations.xlsx")
+write_xlsx(df_intensite_stations, "C:/Users/djoul/Bureau/data_vis/données/data_intensite_stations.xlsx")
+
+# Message de confirmation
+cat("Fichier exporté avec succès : C:/Users/djoul/Bureau/data_vis/data_degres.xlsx\n")
+
+```
+
+
+
+```{r}
+# 2ème étape les données des exploitations ou vignobles
+#création base fusion vignobles avec données géo , codes postaux...
+
+# Charger les données
+data <- read_excel("C:/Users/djoul/Bureau/data_vis/données/2024-11-25_delim-parcellaire-aoc-shp.xlsx")
+data2 <- read_excel("C:/Users/djoul/Bureau/data_vis/données/correspondance-code-insee-code-postal.xlsx")
+
+# Créer une copie de 'data' pour une manipulation distincte
+data3 <- data
+
+# Ajouter les colonnes de data2 correspondant à chaque ligne de data3
+for (i in seq_len(nrow(data3))) {
+  match_row <- data2[data2$`Code INSEE` == data3$`insee`[i], ]
+  if (nrow(match_row) > 0) {
+    # Ajouter les colonnes de data2 dans data3
+    data3[i, names(match_row)] <- match_row
+  }
+}
+
+# Nettoyer les données
+# Conserver uniquement les lignes où 'type_prod' est "Vins"
+data3 <- data3 %>%
+  filter(type_prod == "Vins")
+# OK retrait de 49 lignes viandes et fruits
+
+# Nettoyer les caractères spéciaux dans la colonne app
+data3$app <- iconv(data3$app, from = "UTF-8", to = "ASCII//TRANSLIT")
+
+# Remplacement des caractères spécifiques
+data3$app <- gsub("\\?\\?", "è", data3$app)  # Remplacer "??" par "è"
+data3$app <- gsub("\\?R", "é", data3$app)    # Remplacer "?R" par "é"
+data3$app <- gsub("\\?o", "â", data3$app)    # Remplacer "?o" par "â"
+data3$app <- gsub(" ├®", "é", data3$app)  # Remplacer "├®" par "é"
+data3$app <- gsub(" ├┤ ", "ô", data3$app)  # Remplacer "├┤" par "ô"
+
+# Supprimer les espaces en trop après les modifications (au cas où)
+data3$app <- trimws(data3$app)
+
+```
+
+
+```{r}
+# Fonction de classification des types de vin
+classify_wine <- function(vin) {
+  if (grepl(paste(c(
+    # Liste des vins blancs
+    "Anjou", "Anjou Brissac", "Anjou-Coteaux de la Loire", "Bonnezeaux", "Coteaux d’Ancenis",
+    "Coteaux de l'Aubance", "Coteaux du Layon", "Coulée de Serrant", "Crémant de Loire",
+    "Gros Plant du Pays Nantais", "Muscadet", "Muscadet Coteaux de la Loire", "Muscadet Sèvre et Maine",
+    "Quarts de Chaume", "Savennières", "Barsac", "Cadillac", "Loupiac", "Monbazillac", "Sauternes",
+    "Entre-deux-Mers", "Alsace ou Vin d'Alsace", "Alsace grand cru Altenberg de Bergbieten",
+    "Alsace grand cru Altenberg de Bergheim", "Alsace grand cru Altenberg de Wolxheim",
+    "Alsace grand cru Brand", "Alsace grand cru Eichberg", "Alsace grand cru Hengst",
+    "Alsace grand cru Pfingstberg", "Alsace grand cru Schlossberg", "Alsace grand cru Schoenenbourg",
+    "Chablis", "Chablis Grand Cru", "Petit Chablis", "Pouilly-Fumé", "Quincy", "Reuilly",
+    "Sancerre", "Vouvray", "Coteaux de Saumur", "Haut-Poitou", "Saumur", "Clairette de Bellegarde",
+    "Alsace grand cru Bruderthal", "Alsace grand cru Engelberg", "Alsace grand cru Florimont",
+    "Alsace grand cru Frankstein", "Alsace grand cru Froehn", "Alsace grand cru Furstentum",
+    "Alsace grand cru Geisberg", "Alsace grand cru Gloeckelberg", "Alsace grand cru Goldert",
+    "Alsace grand cru Hatschbourg", "Alsace grand cru Kaefferkopf", "Alsace grand cru Kanzlerberg",
+    "Alsace grand cru Kastelberg", "Alsace grand cru Kessler", "Alsace grand cru Kirchberg de Barr",
+    "Alsace grand cru Kirchberg de Ribeauvillé", "Alsace grand cru Kitterlé", "Alsace grand cru Mambourg",
+    "Alsace grand cru Mandelberg", "Alsace grand cru Marckrain", "Alsace grand cru Moenchberg",
+    "Alsace grand cru Muenchberg", "Alsace grand cru Ollwiller", "Alsace grand cru Osterberg",
+    "Alsace grand cru Pfersigberg", "Alsace grand cru Praelatenberg", "Alsace grand cru Rangen",
+    "Alsace grand cru Rosacker", "Alsace grand cru Saering", "Alsace grand cru Sommerberg",
+    "Alsace grand cru Sonnenglanz", "Alsace grand cru Spiegel", "Alsace grand cru Sporen",
+    "Alsace grand cru Steinert", "Alsace grand cru Steingrubler", "Alsace grand cru Steinklotz",
+    "Alsace grand cru Vorbourg", "Alsace grand cru Wiebelsberg", "Alsace grand cru Wineck-Schlossberg",
+    "Alsace grand cru Winzenberg", "Alsace grand cru Zinnkoepfle", "Alsace grand cru Zotzenberg",
+    "Côtes de Toul", "Moselle", "Pouilly-Fumé ou Blanc Fumé de Pouilly", "Pouilly-sur-Loire",
+    "Valençay", "Fiefs Vendéens", "Cérons", "Côtes de Montravel", "Haut-Montravel", "Montravel",
+    "Rosette", "Sainte-Croix-du-Mont", "Saussignac", "Château-Chalon", "Picpoul de Pinet",
+    "Clairette de Languedoc", "Vin de Savoie ou Savoie", "Rully", "Saint-Véran", "Coteaux d'Ancenis", "Fiefs Vendéens", "Cérons", "Côtes de Montravel", "Haut-Montravel", 
+"Montravel", "Rosette", "Sainte-Croix-du-Mont", "Saussignac", "Côtes de Toul", "Crémant d’Alsace", 
+"Crémant de Bourgogne", "Crémant du Jura", "Macvin du Jura", "Château-Chalon", "Meursault", 
+"Montrachet", "Pouilly-Fuissé", "Pouilly-Loché", "Pouilly-Vinzelles", "Clairette de Languedoc", 
+"Clairette de Die", "Condrieu", "Coteaux de Die"
+  ), collapse = "|"), vin, ignore.case = TRUE)) {
+    return("Blanc")
+  } else if (grepl(paste(c(
+    # Liste des vins rouges
+    "Anjou Villages", "Beaumes de Venise", "Cairanne", "Châteauneuf-du-Pape", "Côtes du Rhône",
+    "Côtes du Rhône Villages", "Gigondas", "Lirac", "Rasteau", "Vacqueyras", "Ventoux", "Bordeaux",
+    "Bordeaux supérieur", "Canon Fronsac", "Fronsac", "Graves", "Haut-Médoc", "Lalande-de-Pomerol",
+    "Margaux", "Médoc", "Montagne-Saint-Emilion", "Pauillac", "Puisseguin Saint-Emilion", 
+    "Saint-Emilion", "Saint-Emilion grand cru", "Saint-Estèphe", "Saint-Georges-Saint-Emilion",
+    "Saint-Julien", "Saumur-Champigny", "Côte-Rôtie", "Cornas", "Crozes-Hermitage", "Hermitage",
+    "Saint-Joseph", "Vinsobres", "Cahors", "Fronton", "Gaillac", "Marcillac", "Moulin-à-Vent",
+    "Brouilly", "Fleurie", "Juliénas", "Morgon", "Saint-Amour", "Blagny", "Chambertin",
+    "Chambolle-Musigny", "Chapelle-Chambertin", "Echezeaux", "Gevrey-Chambertin",
+    "Marsannay", "Mazis-Chambertin", "Morey-Saint-Denis", "Musigny", "Nuits-Saint-Georges",
+    "Pommard", "Vosne-Romanée", "Beaujolais", "Bergerac", "Buzet", "Côtes de Bergerac",
+    "Côtes de Bourg, Bourg et Bourgeais", "Côtes de Duras", "Côtes du Marmandais", "Pécharmant",
+    "Pessac-Léognan", "Pomerol", "Bandol", "Brulhois", "Corbières", "Fitou", "Minervois",
+    "Saint-Mont", "Madiran", "Costières de Nîmes", "Côtes du Rhône", "Côtes du Rhône Villages", "Côtes de Bourg, Bourg et Bourgeais", 
+    "Côtes de Duras", "Côtes du Marmandais", "Ajaccio", "Patrimonio", "Aloxe-Corton", "Arbois", 
+    "Auxey-Duresses", "Beaune", "Bonnes-Mares", "Bourgogne", "Clos de la Roche", "Clos des Lambrays", 
+    "Clos de Tart", "Clos de Vougeot ou Clos Vougeot", "Clos Saint-Denis", "Corton", "Fixin", "Irancy", 
+    "Ladoix", "La Romanée", "La Tâche", "Maranges", "Moulin-à-Vent", "Pacherenc du Vic-Bilh", 
+    "Saint-Nicolas-de-Bourgueil", "Bourgueil", "Chinon", "Saint-Péray", "Saint-Pourçain"
+  ), collapse = "|"), vin, ignore.case = TRUE)) {
+    return("Rouge")
+  } else if (grepl(paste(c(
+    # Liste des vins rosés
+    "Rosé d'Anjou", "Rosé de Loire", "Tavel", "Luberon", "Pierrevert", "Côtes de Provence",
+    "Coteaux d'Aix-en-Provence", "Les Baux de Provence", "Palette", "Côtes de Provence", "Coteaux varois en Provence", "Bouzeron"
+  ), collapse = "|"), vin, ignore.case = TRUE)) {
+    return("Rosé")
+  } else {
+    # Autres vins
+    return("Autre")
+  }
+}
+```
+
+```{r}
+# Créer le dataset data4 à partir de data3 avec une nouvelle colonne 'type_vin'
+data4 <- data3 %>%
+  mutate(type_vin = sapply(app, classify_wine))  # 'app' contient les catégories de vin
+
+# créer les colonnes latitude et longitude à partir de "geo_point_2d"
+data4 <- data4 %>%
+  mutate(
+    latitude = as.numeric(sub(",.*", "", geo_point_2d)),
+    longitude = as.numeric(sub(".*,", "", geo_point_2d))
+  )
+
+# Ajouter une colonne de numéros d'exploitation de 1 à N 
+data4 <- data4 %>%
+  mutate(no_exploitation = row_number())
+
+# ensuite nous avons plusieurs lignes pour certaines exploitations/vignobles 
+# car elles font plusieurs vins avec des types et appellations différentes
+# on va regrouper chaque exploitation sur une seule ligne, en gardant le nom de toutes les appellations 
+# on garde une colonne avec les différents types de vins mais on détermine un type majoritaire 
+# pour simplifier nos représentations
+
+data5 <- data4 %>%
+  group_by(latitude, longitude) %>%
+  summarise(
+    # 1) Conserver toutes les colonnes SAUF `app` et `type_vin`,
+    #    en prenant la première occurrence
+    across(
+      # on exclut ce qu'on va traiter manuellement plus bas
+      -c(app, type_vin),
+      ~ first(.x),               # si vous préférez unique(.x) ou autre, adaptez
+      .names = "{.col}"
+    ),
+    
+    # 2) Lister toutes les appellations distinctes, séparées par des virgules
+    app = paste0(sort(unique(app)), collapse = ", "),
+    
+    # 3) Lister tous les types de vin distincts, séparés par des virgules
+    différents_type_vin = paste0(sort(unique(type_vin)), collapse = ", "),
+    
+    # 4) Déterminer le type de vin principal selon la règle majoritaire
+    type_vin_principal = {
+      
+      # On construit un tableau de fréquences du type_vin
+      tab <- as.data.frame(table(type_vin))
+      colnames(tab) <- c("type_vin", "count")  # plus lisible
+      
+      # On crée un facteur qui respecte la priorité souhaitée
+      tab$type_vin <- factor(
+        tab$type_vin, 
+        levels = c("Rouge", "Blanc", "Rosé", "Autre")  # ordre de priorité
+      )
+      
+      # On classe d'abord par nombre (desc), puis par facteur (priorité)
+      tab <- tab[order(-tab$count, tab$type_vin), ]
+      
+      # Le 1er dans ce tri est le type principal
+      as.character(tab$type_vin[1])
+    },
+    
+    .groups = "drop"
+  )
+
+# Ajouter une colonne de numéros d'exploitation de 1 à N 
+data5 <- data5 %>%
+  mutate(no_exploitation = row_number())
+```
+
+```{r}
+# Interpolation inverse de la distance 
+# Pour estimer le nombre moyen de jours de gel d’un vignoble en fonction de celui des stations
+# météorologiques et de leur distance au vignoble (on prend les stations dans un rayon de 15km 
+# autour du vignoble)
+
+
+
+
+# Préparation des données des stations météorologiques
+stations_df <- df_coord_stations %>%
+  select(`ID OMM station`, Latitude, Longitude)
+
+# Numéros des exploitations et IDs des stations
+vineyard_ids <- data5$no_exploitation
+station_ids <- stations_df$`ID OMM station`
+
+# Initialiser la matrice des distances avec des NA
+distance_matrix <- matrix(NA, nrow = length(vineyard_ids), ncol = length(station_ids) + 1)
+
+# Remplir la première colonne avec les numéros d'exploitation
+distance_matrix[, 1] <- vineyard_ids
+
+# Calculer les distances pour chaque exploitation/station
+for (i in seq_along(vineyard_ids)) {
+  vineyard <- data5[i, ]
+  
+  # Vérifier si les coordonnées de l'exploitation sont valides
+  if (is.na(vineyard$latitude) || is.na(vineyard$longitude)) {
+    next  # Passer à l'exploitation suivante si les coordonnées sont manquantes
+  }
+  
+  for (j in seq_along(station_ids)) {
+    station <- stations_df[j, ]
+    
+    # Vérifier si les coordonnées de la station sont valides
+    if (is.na(station$Latitude) || is.na(station$Longitude)) {
+      next  # Passer à la station suivante si les coordonnées sont manquantes
+    }
+    
+    # Calculer la distance entre l'exploitation et la station
+    distance <- distHaversine(c(vineyard$longitude, vineyard$latitude), c(station$Longitude, station$Latitude))
+    
+    # Insérer la distance dans la matrice
+    distance_matrix[i, j + 1] <- distance
+  }
+}
+
+# Convertir la matrice des distances en dataframe
+distance_matrix_df <- as.data.frame(distance_matrix)
+
+# Ajouter les noms des colonnes (Exploitation et IDs des stations)
+colnames(distance_matrix_df) <- c("Exploitation", as.character(station_ids))
+
+# Initialiser la matrice des poids (interpolation) avec des zéros
+interpolation_matrix <- matrix(0, nrow = nrow(distance_matrix), ncol = ncol(distance_matrix))
+
+# Copier la première colonne (Exploitation) depuis la matrice des distances
+interpolation_matrix[, 1] <- distance_matrix[, 1]
+
+# Calculer les poids à partir des distances
+for (i in 1:nrow(distance_matrix)) {
+  for (j in 2:ncol(distance_matrix)) {
+    distance <- distance_matrix[i, j]
+    
+    # Calculer le poids si la distance est valide et <= 150 km
+    if (!is.na(distance) && distance <= 150000) {
+      interpolation_matrix[i, j] <- 1 / (distance^2)
+    } else {
+      interpolation_matrix[i, j] <- 0
+    }
+  }
+}
+
+# Convertir la matrice des poids en dataframe
+interpolation_matrix_df <- as.data.frame(interpolation_matrix)
+
+# Ajouter les noms des colonnes (Exploitation et IDs des stations)
+colnames(interpolation_matrix_df) <- c("Exploitation", as.character(station_ids))
+
+# Exporter la matrice d'interpolation en Excel
+write_xlsx(interpolation_matrix_df, "C:/Users/djoul/Bureau/data_vis/données/interpolation_matrix.xlsx")
+cat("Matrice d'interpolation exportée avec succès : interpolation_matrix.xlsx\n")
+
+```
+
+```{r}
+# Création de data6 à partir de data4 avec les jours de gel interpolés
+data6 <- data5
+
+print("Début du calcul des jours de gel")
+
+# Fonction de calcul d'interpolation (reste inchangée)
+calculate_interpolated_frost <- function(stations_data, interpolation_matrix) {
+  station_columns <- setdiff(names(interpolation_matrix), "Exploitation")
+  
+  interpolated_days <- data.frame(
+    no_exploitation = interpolation_matrix$Exploitation,
+    frost_days = apply(interpolation_matrix[,station_columns], 1, function(weights) {
+      non_zero_weights <- weights > 0
+      if(!any(non_zero_weights)) return(NA)
+      
+      valid_stations <- !is.na(stations_data$nb_jour_gel)
+      stations_to_use <- valid_stations & (stations_data$`ID OMM station` %in% names(weights)[non_zero_weights])
+      
+      if(!any(stations_to_use)) return(NA)
+      
+      valid_weights <- weights[match(stations_data$`ID OMM station`[stations_to_use], names(weights))]
+      valid_frost_days <- stations_data$nb_jour_gel[stations_to_use]
+      
+      sum_weights <- sum(valid_weights, na.rm = TRUE)
+      if (sum_weights > 0) {
+        weighted_sum <- sum(valid_weights * valid_frost_days, na.rm = TRUE)
+        return(weighted_sum / sum_weights)
+      } else {
+        return(NA)
+      }
+    })
+  )
+  return(interpolated_days)
+}
+
+# Calculer pour chaque mois et année
+results_list <- list()
+for(year in 2019:2023) {
+  for(month in c(3,4,5)) {
+    
+    # Filtrer les données des stations
+    stations_data <- df_intensite_stations %>%
+      filter(mois == month, annee == year) %>%
+      select(`ID OMM station`, nb_jour_gel)
+    
+    # Calculer l'interpolation
+    result <- calculate_interpolated_frost(stations_data, interpolation_matrix_df)
+    
+    # Créer un nom de colonne spécifique pour cette combinaison mois/année
+    col_name <- paste0("jours_gel_", year, "_mois_", month)
+    results_list[[col_name]] <- result$frost_days
+  }
+}
+
+# Ajouter toutes les colonnes à data6
+for(col_name in names(results_list)) {
+  data6[[col_name]] <- results_list[[col_name]]
+}
+
+
+# Exporter data5 au format Excel
+write_xlsx(data6, "C:/Users/djoul/Bureau/data_vis/données/data_vignes_avec_gel.xlsx")
+
+print("Export terminé")
+
+```
+
+```{r}
+
+```
+
