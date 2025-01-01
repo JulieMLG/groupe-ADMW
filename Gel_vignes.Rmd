@@ -1,0 +1,2355 @@
+---
+title: "Impact du Gel sur les Vignobles"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    theme: bootstrap
+runtime: shiny
+---
+
+<head>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+</head>
+
+<style>
+body {
+  margin-right: 0.5cm !important;
+}
+
+.navbar {
+  background-color: rgb(109, 7, 26) !important;
+  color: white !important;
+  width: 100%;
+  margin: 0;
+  border-radius: 0;
+}
+
+.navbar-brand {
+  color: white !important;
+  font-size: 1.5em;
+  font-weight: bold;
+  padding: 15px;
+}
+
+.sidebar {
+  background-color: rgb(145, 41, 57) !important;
+  color: white !important;
+  padding: 15px;
+}
+
+.sidebar p {
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 20px;
+  font-style: italic;
+  text-align: center;
+}
+
+.action-button {
+  background-color: rgb(109, 7, 26);
+  color: white;
+  border: none;
+  border-radius: 5px;
+  padding: 10px 15px;
+  margin-bottom: 10px;
+  width: 100%;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  transition: background-color 0.3s ease;
+  display: flex;
+  align-items: center;
+}
+
+.action-button i {
+  font-size: 16px;
+  margin-right: 12px;
+  min-width: 20px;
+  text-align: center;
+}
+
+.action-button:hover {
+  background-color: rgb(145, 41, 57);
+}
+
+/* Ajout ici pour les onglets */
+.nav-tabs > li > a {
+  color: rgb(109, 7, 26) !important;
+  font-weight: bold;
+}
+
+.nav-tabs > li.active > a {
+  color: rgb(109, 7, 26) !important;
+  font-weight: bold;
+}
+
+/* Nouveaux styles pour le fond et les éléments */
+.tab-content {
+  background-color: rgb(242, 233, 235) !important;
+  min-height: calc(100vh - 50px);
+  padding: 20px;
+}
+
+.tab-content > div {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.tab-pane {
+  background-color: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+.card, 
+.reactable-table-container, 
+.leaflet-container,
+.plot-container,
+.shiny-plot-output,
+div[style*="background-color: #f8f9fa"] {
+  background-color: white !important;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  margin-bottom: 20px;
+}
+
+/* Style amélioré pour les onglets */
+.nav-tabs {
+  border-bottom: 1px solid rgb(109, 7, 26);
+}
+
+.nav-tabs > li > a {
+  background-color: white !important;
+  border: 1px solid #ddd;
+  margin-right: 5px;
+}
+
+.nav-tabs > li.active > a {
+  background-color: white !important;
+  border-bottom-color: transparent;
+}
+
+/* Style pour les conteneurs de statistiques */
+div[style*="background-color: #f8f9fa"] {
+  background-color: white !important;
+  border: 1px solid #e9ecef;
+}
+
+
+
+</style>
+
+```{r setup, include=FALSE}
+# Chargement des bibliothèques
+library(flexdashboard)
+library(shiny)
+library(leaflet)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(leaflet.minicharts)
+library(shinyjs)
+library(stringr)
+library(reactable)
+library(htmltools)
+library(scales)
+library(gridExtra)
+library(grid)
+library(RColorBrewer)
+library(tidyr)
+
+useShinyjs()
+
+# Définir le chemin pour les images
+addResourcePath(prefix = "pics", directoryPath = "./www")
+
+# Charger et nettoyer les données
+clean_brackets <- function(x) {
+  x %>%
+    str_remove_all('\\[|\\]|"|\'') %>%  # Ajout de " pour gérer les doubles guillemets
+    str_trim()
+}
+
+# Charger les données
+data_vignes <- read_excel("data_vignes_avec_gel.xlsx")
+data_degres <- read_excel("data_degres.xlsx")
+data_coord_stations <- read_excel("data_coord_stations.xlsx")
+data_intensite <- read_excel("data_intensite_stations.xlsx")
+
+# Définir les couleurs pour les types de vin
+wine_colors <- c(
+  "Blanc" = "#FFE5B4",
+  "Rouge" = "#6D071A",
+  "Rosé" = "#FFB6C1",
+  "Autre" = "#808080"
+)
+
+# Nettoyage des données
+data_coord <- data_vignes %>%
+  mutate(
+    Région = clean_brackets(Région),
+    Département = clean_brackets(Département),
+    latitude = as.numeric(sub(",.*", "", geo_point_2d)),
+    longitude = as.numeric(sub(".*,", "", geo_point_2d))
+  ) %>%
+  filter(!is.na(latitude) & !is.na(longitude) & 
+         latitude >= 41 & latitude <= 52 &
+         longitude >= -5 & longitude <= 10)
+
+unique(data_coord$type_vin_principal)
+
+# Création d'un dataset uniquement pour le comptage des stations uniques
+stations_count <- data_coord_stations %>%
+  distinct(`ID OMM station`, `region (code)`, Latitude, Longitude) %>%
+  mutate(`ID OMM station` = as.character(`ID OMM station`))
+
+
+
+# Création de la fonction de couleur pour le dégradé
+create_frost_palette <- function(n_days) {
+  colorRampPalette(c("#FFFF00", "#00FF00", "#0000FF"))(n_days + 1)
+}
+
+data_coord <- data_coord %>%
+  mutate(
+    color = ifelse(type_vin_principal %in% names(wine_colors), 
+                  wine_colors[type_vin_principal], 
+                  "#808080")
+  )
+
+# Préparation des données de température
+prepare_frost_data <- function(data_degres) {
+  data_degres %>%
+    mutate(
+      mois = month(date),
+      année = year(date),
+      jour_gel = temp_min < 0
+    ) %>%
+    filter(mois %in% c(3, 4, 5)) %>%  # Mars (3), Avril (4), Mai (5)
+    group_by(`ID OMM station`, mois, année) %>%
+    summarise(
+      jours_gel = sum(jour_gel, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+#extraction des années dispos
+years_available <- data_degres %>%
+  pull(annee) %>%
+  unique() %>%
+  sort()
+
+
+# Fonction pour calculer les jours de gel par station
+calculate_station_frost <- function(year, month) {
+  data_degres %>%
+    filter(
+      annee == year,
+      mois == month,
+      !is.na(temp_min)
+    ) %>%
+    group_by(`ID OMM station`, Longitude, Latitude) %>%
+    summarise(
+      jours_gel = sum(temp_min < 0, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+# Fonction pour l'interpolation IDW
+calculate_vineyard_frost <- function(vineyard_lat, vineyard_lon, stations_data, max_dist = 15000) {
+  # Calculer les distances pour toutes les stations
+  stations_with_dist <- stations_data %>%
+    left_join(stations_count, by = c("ID OMM station" = "ID OMM station")) %>%
+    mutate(
+      distance = distHaversine(
+        c(vineyard_lon, vineyard_lat),
+        cbind(Longitude, Latitude)
+      )
+    ) %>%
+    filter(
+      distance <= max_dist,
+      !is.na(jours_gel)
+    ) %>%
+    arrange(distance) %>%
+    slice_head(n = 3)
+  
+  # Si pas assez de stations proches, retourner NA
+  if (nrow(stations_with_dist) < 2) return(NA_real_)
+  
+  # Calculer les poids IDW
+  weights <- 1 / (stations_with_dist$distance ^ 2)
+  weights <- weights / sum(weights)
+  
+  # Calculer la moyenne pondérée des jours de gel
+  weighted_frost <- sum(stations_with_dist$jours_gel * weights)
+  
+  return(round(weighted_frost, 1))
+}
+
+selected_station <- reactiveVal(NULL)
+
+selected_month <- reactiveVal(3)  # Mars par défaut
+```
+
+Column {.sidebar data-width=350}
+-----------------------------------------------------------------------
+
+```{r sidebar}
+div(
+  p("Le gel printanier représente une menace majeure pour les vignobles français. 
+     Chaque année, des milliers d'hectares sont potentiellement impactés.")
+)
+
+# Boutons principaux
+actionButton("intro", HTML("<i class='fa fa-info-circle'></i>Introduction"), 
+             class = "action-button")
+
+actionButton("methodes", HTML("<i class='fa fa-shield-alt'></i>Méthodes de Protection"), 
+             class = "action-button")
+
+actionButton("assurances", HTML("<i class='fa fa-file-contract'></i>Assurances"), 
+             class = "action-button")
+
+# Bouton principal pour les vignobles
+actionButton("cartes", HTML("<i class='fa fa-wine-bottle'></i>Les vignobles en France"), 
+             class = "action-button")
+
+# Sous-sections des cartes
+uiOutput("cartes_subsections")
+
+# Bouton principal pour Visualisation des températures
+actionButton("températures", HTML("<i class='fa fa-thermometer-half'></i>Visualisation des températures"), 
+             class = "action-button")
+
+# Sous-sections des températures
+uiOutput("temp_subsections")
+
+# Autres boutons principaux
+actionButton("exploitation", HTML("<i class='fa fa-tractor'></i>Votre exploitation"), 
+             class = "action-button")
+
+actionButton("sources", HTML("<i class='fa fa-book'></i>Sources"), 
+             class = "action-button")
+
+
+```
+
+Column {.tabset data-width=650}
+-----------------------------------------------------------------------
+
+```{r}
+ # Variables réactives
+current_section <- reactiveVal("intro")
+current_map_section <- reactiveVal("carte_france")  # Par défaut : "France entière"
+current_temp_section <- reactiveVal("stations_meteo")  # Par défaut : "Stations météo"
+
+# Observers pour la navigation principale
+observeEvent(input$intro, { current_section("intro") })
+observeEvent(input$methodes, { current_section("methodes") })
+observeEvent(input$assurances, { current_section("assurances") })
+observeEvent(input$cartes, { current_section("cartes") })
+observeEvent(input$températures, { current_section("températures") })
+observeEvent(input$exploitation, { current_section("exploitation") })
+observeEvent(input$sources, { current_section("sources") })
+
+# Observers pour les sous-sections des cartes
+observeEvent(input$carte_france, { current_map_section("carte_france") })
+observeEvent(input$carte_region, { current_map_section("carte_region") })
+observeEvent(input$carte_departement, { current_map_section("carte_departement") })
+
+# Observers pour les sous-sections des températures
+observeEvent(input$stations_meteo, { current_temp_section("stations_meteo") })
+observeEvent(input$exploitations, { current_temp_section("exploitations") })
+
+# Réinitialiser les sous-sections lorsque la section principale change
+observeEvent(current_section(), {
+    # Si on quitte "cartes", réinitialiser la sous-section des cartes
+    if (current_section() != "cartes") {
+        current_map_section("carte_france")
+    }
+    # Si on quitte "températures", réinitialiser la sous-section des températures
+    if (current_section() != "températures") {
+        current_temp_section("stations_meteo")
+    }
+})
+
+# Sous-sections dynamiques pour les cartes
+  output$cartes_subsections <- renderUI({
+    if (current_section() == "cartes") {
+      div(
+        style = "margin-left: 20px; padding-top: 10px;",
+        actionButton("carte_france", HTML("<i class='fa fa-map'></i> France entière"), 
+                     class = "sub-action-button"),
+        actionButton("carte_region", HTML("<i class='fa fa-map-marked'></i> Par région"), 
+                     class = "sub-action-button"),
+        actionButton("carte_departement", HTML("<i class='fa fa-map-pin'></i> Par département"), 
+                     class = "sub-action-button")
+      )
+    } else {
+      NULL  # Aucun affichage si la section active n'est pas "cartes"
+    }
+  })
+
+  # Sous-sections dynamiques pour les températures
+  output$temp_subsections <- renderUI({
+    if (current_section() == "températures") {
+      div(
+        style = "margin-left: 20px; padding-top: 10px;",
+        actionButton("stations_meteo", HTML("<i class='fa fa-cloud'></i> Stations météo"), 
+                     class = "sub-action-button"),
+        actionButton("exploitations", HTML("<i class='fa fa-tractor'></i> Exploitations"), 
+                     class = "sub-action-button")
+      )
+    } else {
+      NULL  # Aucun affichage si la section active n'est pas "températures"
+    }
+  })
+  
+################################################################################  
+# Interface principale
+output$main_content <- renderUI({
+  # Obtenir le titre en fonction de la section courante
+  titre <- switch(current_section(),
+    "intro" = "Introduction",
+    "methodes" = "Méthodes de Protection",
+    "assurances" = "Situation des Assurances",
+    "cartes" = "Les vignobles en France"
+  )
+  if (current_section() == "intro") {
+    div(
+      style = "background-color: rgb(242, 233, 235); padding: 20px;",
+      div(
+        style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+        h3("Introduction"),
+        div(
+          style = "display: flex; align-items: start; justify-content: space-between;",
+          div(
+            style = "flex: 1; padding-right: 20px;",
+            p(style = "text-align: justify;", 
+              "Le gel printanier est une menace majeure pour les vignobles, particulièrement après le débourrement, où les bourgeons jeunes sont très vulnérables. 
+              Ce phénomène, aggravé par les changements climatiques, peut détruire une grande partie des récoltes et compromettre la production annuelle, 
+              avec des pertes économiques significatives pour les viticulteurs."),
+            p(style = "text-align: justify;", 
+              "Les assurances agricoles offrent une protection contre ces aléas, mais elles restent coûteuses et parfois inadaptées. 
+              Les seuils de déclenchement et les primes élevées compliquent leur accès pour de nombreux exploitants.")
+          ),
+          div(
+            style = "flex: 0 0 60%; text-align: right;",
+            img(
+              src = "pics/sensi_vigne2.png", 
+              alt = "Image de vignoble", 
+              style = "width: 100%; max-width: 600px; height: auto;"
+            )
+          )
+        )
+      )
+    )
+    
+################################################################################      
+    
+} else if (current_section() == "methodes") {
+    div(
+      style = "background-color: rgb(242, 233, 235); padding: 20px;",
+      h3(
+        style = "color: #6D071A; margin-bottom: 20px;",
+        "Protéger les Vignes : Méthodes de Lutte Contre le Gel"
+      ),
+      
+      # Brassage de l'air
+      div(
+        style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+        div(
+          style = "display: flex; align-items: center;",
+          div(
+            style = "flex: 0 0 40%; text-align: left;",
+            img(src = "pics/brasseur.png", 
+                alt = "Brasseur d'air", 
+                style = "width: 100%; max-width: 300px; height: auto; border-radius: 4px;")
+          ),
+          div(
+            style = "flex: 1; padding-left: 20px;",
+            p(style = "text-align: justify; margin: 0;", 
+              tags$strong("Brassage de l'air"), br(),
+              "Le brassage de l'air repose sur l'utilisation de ventilateurs ou d'éoliennes pour mélanger l'air chaud situé en hauteur avec l'air froid au sol. 
+              Cette technique permet d'élever légèrement la température autour des vignes.")
+          )
+        )
+      ),
+      
+      # Dispositifs de chauffage
+      div(
+        style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+        div(
+          style = "display: flex; align-items: center; flex-direction: row-reverse;",
+          div(
+            style = "flex: 0 0 40%; text-align: left;",
+            img(src = "pics/chauffage.png", 
+                alt = "Dispositifs de chauffage", 
+                style = "width: 100%; max-width: 300px; height: auto; border-radius: 4px;")
+          ),
+          div(
+            style = "flex: 1; padding-right: 20px;",
+            p(style = "text-align: justify; margin: 0;", 
+              tags$strong("Dispositifs de chauffage"), br(),
+              "Des bougies antigel ou des chaufferettes sont disposées entre les rangs de vignes pour augmenter la température ambiante. 
+              Bien que coûteux, ce dispositif est efficace pour protéger les bourgeons lors des nuits froides.")
+          )
+        )
+      ),
+      
+      # Aspersion d'eau
+      div(
+        style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+        div(
+          style = "display: flex; align-items: center;",
+          div(
+            style = "flex: 0 0 40%; text-align: left;",
+            img(src = "pics/aspersion.png", 
+                alt = "Aspersion d'eau", 
+                style = "width: 100%; max-width: 300px; height: auto; border-radius: 4px;")
+          ),
+          div(
+            style = "flex: 1; padding-left: 20px;",
+            p(style = "text-align: justify; margin: 0;", 
+              tags$strong("Aspersion d'eau"), br(),
+              "L'aspersion d'eau sur les vignes crée une couche de glace autour des bourgeons. En se solidifiant, 
+              cette glace libère de la chaleur latente, maintenant les tissus végétaux à une température juste au-dessus du point de congélation.")
+          )
+        )
+      ),
+      
+      # Dispositifs d'extraction
+      div(
+        style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+        div(
+          style = "display: flex; align-items: center; flex-direction: row-reverse;",
+          div(
+            style = "flex: 0 0 40%; text-align: left;",
+            img(src = "pics/extracteur.png", 
+                alt = "Extracteur d'air froid", 
+                style = "width: 100%; max-width: 300px; height: auto; border-radius: 4px;")
+          ),
+          div(
+            style = "flex: 1; padding-right: 20px;",
+            p(style = "text-align: justify; margin: 0;", 
+              tags$strong("Dispositifs d'extraction de l'air froid"), br(),
+              "Ces dispositifs aspirent l'air froid stagné près du sol et le redistribuent plus loin, permettant ainsi de prévenir 
+              la formation de poches de gel autour des vignes. Cela favorise une circulation plus homogène de l'air.")
+          )
+        )
+      )
+    )
+  } else if (current_section() == "assurances") {
+    tagList(
+      tabsetPanel(
+        # Onglet MRC
+        tabPanel("MRC",
+          div(
+            style = "display: flex; flex-direction: column;",
+            div(
+              style = "text-align: center; margin-bottom: 20px;",
+              img(
+                src = "pics/assurance.jpg",
+                alt = "Assurance MRC",
+                style = "max-width: 100%; height: auto; margin: 0 auto;"
+              )
+            ),
+            div(
+              style = "text-align: justify; padding: 20px;",
+              p("En France, l'assurance récolte, ou Multirisque Climatique (MRC), est un dispositif essentiel pour protéger 
+                les exploitations agricoles contre les aléas climatiques tels que la sécheresse, la grêle ou le gel. 
+                Depuis la réforme entrée en vigueur le 1ᵉʳ janvier 2023, ce système repose sur trois niveaux de couverture :"),
+              tags$ul(
+                style = "list-style-type: none; padding-left: 20px;",
+                tags$li(
+                  style = "margin-bottom: 10px;",
+                  tags$strong("Risques de faible ampleur : "),
+                  "pris en charge directement par l'agriculteur, qui peut mettre en place des stratégies de prévention, 
+                  diversification ou épargne de précaution."
+                ),
+                tags$li(
+                  style = "margin-bottom: 10px;",
+                  tags$strong("Risques d'intensité moyenne : "),
+                  "couverts par l'assurance multirisque climatique subventionnée par l'État, avec une franchise pouvant 
+                  descendre jusqu'à 20 % des pertes et une subvention de la prime d'assurance atteignant 70 %."
+                ),
+                tags$li(
+                  style = "margin-bottom: 10px;",
+                  tags$strong("Risques de forte ampleur : "),
+                  "au-delà d'un certain seuil de pertes, le Fonds de Solidarité Nationale (FSN) intervient pour indemniser 
+                  les agriculteurs, qu'ils soient assurés ou non, avec un taux d'indemnisation de 90 % pour les assurés et 
+                  de 45 % pour les non-assurés."
+                )
+              ),
+              p("Cette réforme vise à offrir une protection plus efficace aux agriculteurs face à la multiplication des 
+                événements climatiques extrêmes, en simplifiant les procédures et en renforçant la solidarité nationale.")
+            )
+          )
+        ),
+        
+        # Onglet Assurance paramétrique
+        tabPanel("Assurance paramétrique",
+          div(
+            style = "display: flex; flex-direction: column;",
+            div(
+              style = "text-align: center; margin-bottom: 20px;",
+              img(
+                src = "pics/ass_para.jpg",
+                alt = "Assurance paramétrique",
+                style = "max-width: 100%; height: auto; margin: 0 auto;"
+              )
+            ),
+            div(
+              style = "text-align: justify; padding: 20px;",
+              p("L'assurance gel paramétrique est une solution innovante destinée à protéger les exploitations agricoles, 
+                notamment en viticulture et arboriculture, contre les dommages causés par le gel. Contrairement aux 
+                assurances traditionnelles, elle repose sur des indices prédéfinis, tels que des seuils de température 
+                mesurés par des stations météorologiques locales ou des satellites. Lorsque ces seuils sont atteints ou 
+                dépassés, l'indemnisation est automatiquement déclenchée, sans nécessiter d'expertise sur le terrain."),
+              p("Ce mécanisme présente plusieurs avantages : une indemnisation rapide, souvent en quelques jours, une 
+                transparence accrue grâce à des données objectives, et la possibilité de personnaliser la couverture en 
+                fonction des spécificités de chaque exploitation. De plus, l'absence de franchise ou des franchises très 
+                basses rend cette assurance particulièrement attractive pour les producteurs.")
+            )
+          )
+        )
+      )
+    )
+    
+################################################################################      
+    
+  } else if (current_section() == "cartes") {
+    div(
+      style = "background-color: rgb(242, 233, 235); padding: 20px;",
+      
+      # Affichage conditionnel basé sur current_map_section()
+      if (current_map_section() == "carte_france") {
+        div(
+          style = "display: flex; flex-direction: column;",
+          # Première partie (carte + camembert)
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; height: 600px;",
+            div(
+              style = "display: flex; gap: 20px; height: 100%;",
+              div(
+                style = "flex: 1;",
+                leafletOutput("map_national", height = "100%")
+              ),
+              div(
+                style = "flex: 0 0 300px;",
+                h4("Statistiques nationales", style = "margin-top: 0;"),
+                div(
+                  style = "background-color: rgb(242, 233, 235); padding: 15px; border-radius: 5px; margin-bottom: 15px;",
+                  textOutput("total_vignobles_national")
+                ),
+                div(
+                  style = "height: calc(100% - 110px);",
+                  plotOutput("camembert_national", height = "100%")
+                )
+              )
+            )
+          ),
+          # Deuxième partie (tableau)
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px;",
+            h4("Détails par région", style = "margin-top: 0;"),
+            reactableOutput("table_national")
+          )
+        )
+      } else if (current_map_section() == "carte_region") {
+        div(
+          style = "display: flex; flex-direction: column;",
+          # Select input
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+            selectInput("region_select", "Sélectionnez une région",
+                        choices = sort(unique(data_coord$Région)),
+                        width = "50%")
+          ),
+          # Carte et statistiques
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; height: 600px;",
+            div(
+              style = "display: flex; gap: 20px; height: 100%;",
+              div(
+                style = "flex: 1;",
+                leafletOutput("map_region", height = "100%")
+              ),
+              div(
+                style = "flex: 0 0 300px;",
+                h4("Statistiques régionales", style = "margin-top: 0;"),
+                div(
+                  style = "background-color: rgb(242, 233, 235); padding: 15px; border-radius: 5px; margin-bottom: 15px;",
+                  textOutput("total_vignobles_region")
+                ),
+                div(
+                  style = "height: calc(100% - 110px);",
+                  plotOutput("camembert_region", height = "100%")
+                )
+              )
+            )
+          ),
+          # Tableau
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px;",
+            h4("Détails par département", style = "margin-top: 0;"),
+            reactableOutput("table_region")
+          )
+        )
+      } else if (current_map_section() == "carte_departement") {
+        div(
+          style = "display: flex; flex-direction: column;",
+          # Select input
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+            selectInput("dept_select", "Sélectionnez un département",
+                        choices = sort(unique(data_coord$Département)),
+                        width = "50%")
+          ),
+          # Carte et statistiques
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; height: 600px;",
+            div(
+              style = "display: flex; gap: 20px; height: 100%;",
+              div(
+                style = "flex: 1;",
+                leafletOutput("map_dept", height = "100%")
+              ),
+              div(
+                style = "flex: 0 0 300px;",
+                h4("Statistiques départementales", style = "margin-top: 0;"),
+                div(
+                  style = "background-color: rgb(242, 233, 235); padding: 15px; border-radius: 5px; margin-bottom: 15px;",
+                  textOutput("total_vignobles_dept")
+                ),
+                div(
+                  style = "height: calc(100% - 110px);",
+                  plotOutput("camembert_dept", height = "100%")
+                )
+              )
+            )
+          )
+        )
+      }
+    )
+    
+################################################################################  
+    
+  } else if (current_section() == "températures") {
+  div(
+    style = "background-color: rgb(242, 233, 235); padding: 20px;",
+    # Basculer entre les sous-sections
+    if (current_temp_section() == "stations_meteo") {
+      # Sous-section "Stations météo"
+      div(
+        # Texte d'introduction
+        div(
+          style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+          p(
+            style = "text-align: justify; margin-bottom: 15px;",
+            "Le gel printanier constitue une menace majeure pour les vignes, particulièrement pendant le débourrement, phase critique pour tous les types de vin :"
+          ),
+          tags$ul(
+            style = "list-style-type: none; padding-left: 20px;",
+            tags$li(
+              tags$strong("Vins blancs : "),
+              "Les cépages précoces, comme le Chardonnay, sont les plus vulnérables, souvent dès mars et avril."
+            ),
+            tags$li(
+              style = "margin-top: 10px;",
+              tags$strong("Vins rouges : "),
+              "Les cépages tardifs, comme le Cabernet Sauvignon, subissent des risques accrus en avril et mai."
+            ),
+            tags$li(
+              style = "margin-top: 10px;",
+              tags$strong("Vins rosés : "),
+              "Issus de cépages rouges précoces (Grenache, Syrah), ils partagent les périodes de vulnérabilité des vins rouges, avec un risque légèrement plus tôt dans certaines régions."
+            )
+          )
+        ),
+        
+        # Contrôles de la carte
+        uiOutput("map_controls"),
+        
+        # Carte
+        div(
+          style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+          leafletOutput("map_stations", height = "500px")
+        ),
+        
+        # Elements conditionnels selon le mode de vue
+        conditionalPanel(
+          condition = "input.view_type == 'localisation'",
+          uiOutput("station_info"),
+          uiOutput("frost_tables"),
+          div(
+            style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-top: 20px;",
+            plotOutput("station_temp_plot", height = "400px")
+          )
+        )
+      )
+    } else if (current_temp_section() == "exploitations") {
+      # Sous-section "Exploitations"
+      div(
+        # Contrôles de sélection
+        div(
+          style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+          h4(
+            style = "margin-top: 0; margin-bottom: 15px;",
+            "Sélectionnez la zone géographique"
+          ),
+          div(
+            style = "display: flex; gap: 20px; flex-wrap: wrap;",
+            selectInput(
+              "zone_select",
+              "Zone :",
+              choices = c("France entière" = "France", sort(unique(data_coord$Région))),
+              selected = "France",
+              width = "300px"
+            ),
+            selectInput(
+              "month_select_exploit",
+              "Mois :",
+              choices = c("Mars" = 3, "Avril" = 4, "Mai" = 5),
+              selected = 3,
+              width = "200px"
+            )
+          ),
+          div(
+            style = "margin-top: 15px;",
+            checkboxGroupInput(
+              "selected_years_exploit",
+              "Années :",
+              choices = years_available,
+              selected = years_available[1],
+              inline = TRUE
+            ),
+            p(
+              style = "text-align: justify; margin-top: 10px; font-size: 0.9em; font-style: italic; color: #666;",
+              "Si plusieurs années sont sélectionnées, la moyenne du nb de jours de gel est visualisée."
+            )
+          )
+        ),
+        
+        # Carte
+        div(
+          style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+          leafletOutput("map_exploitations", height = "600px")
+        )
+      )
+    }
+  )
+    
+################################################################################  
+    
+  } else if (current_section() == "exploitation") {
+    div(
+      style = "background-color: rgb(242, 233, 235); padding: 20px;",
+      
+      # Petit titre explicatif
+      div(
+        style = "margin-bottom: 20px;",
+        h4(
+          style = "color: #6D071A; font-weight: bold; margin-bottom: 5px;",
+          "Recherchez votre exploitation"
+        ),
+        p(
+          style = "font-style: italic; font-size: 0.9em; color: #666; margin: 0;",
+          "Sélectionnez ou effacez pour saisir votre code postal"
+        )
+      ),
+      
+      # Conteneur pour les menus déroulants en ligne
+      div(
+        style = "display: flex; gap: 20px; margin-bottom: 20px;",
+        div(
+          style = "flex: 1;",
+          uiOutput("select_cp")        # <-- Sélecteur Code Postal
+        ),
+        div(
+          style = "flex: 1;",
+          uiOutput("select_commune")   # <-- Sélecteur Commune
+        )
+      ),
+      
+      # Conteneur pour les informations et la carte
+      div(
+        style = "display: flex; flex-direction: row; gap: 20px;",
+        
+        # Les informations de l'exploitation
+        div(
+          style = "flex: 1;",
+          uiOutput("exploitation_info")
+        ),
+        
+        # La carte
+        div(
+          style = "flex: 2; height: 400px;",
+          leafletOutput("exploitation_map", height = "100%")
+        )
+      ),
+      # Espace entre la carte et le diagramme en barres
+      div(style = "height: 20px;"),
+
+      # diagramme en barre
+      div(
+      style = "background-color: white; border-radius: 8px;
+               box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+               padding: 20px;",
+      plotOutput("exploitation_barplot", height = "350px")
+    ),
+    # Légende de l'indice de risque
+    div(
+      style = "background-color: rgb(242, 233, 235); 
+               border-radius: 8px;
+               padding: 20px;
+               margin-top: 20px;",
+      h4(
+        style = "color: #6D071A; margin-top: 0; margin-bottom: 15px; font-weight: bold;",
+        "Comment est calculé votre indice de Risque ?"
+      ),
+      p(
+        style = "margin-bottom: 10px;",
+        tags$strong("L'indice va de 0 à 5")
+      ),
+      p("Règle de calcul basée sur le nombre de jours de gel maximum de votre période de risque = nb :"),
+      tags$ul(
+        style = "margin-left: 20px;",
+        tags$li("nb = 0  : Indice 0"),
+        tags$li("0 < nb < 2 : Indice 1"),
+        tags$li("2 < nb < 4 : Indice 2"),
+        tags$li("4 < nb < 6 : Indice 3"),
+        tags$li("6 < nb < 8 : Indice 4"),
+        tags$li("8 < nb : Indice 5")
+      )
+    )
+  )
+ 
+################################################################################  
+  
+} else if (current_section() == "sources") {
+    div(
+        style = "background-color: rgb(242, 233, 235); padding: 20px;",
+        
+        # Conteneur principal en grille
+        div(
+            style = "display: grid; grid-template-columns: 1fr 1fr; gap: 20px;",
+
+            # Encarts ligne 1
+            # Encarts en haut à gauche : Données
+            div(
+                style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px;",
+                h3("Données", style = "color: #6D071A; margin-top: 0; margin-bottom: 20px;"),
+                tags$ul(
+                    style = "list-style-type: none; padding-left: 0; margin-bottom: 15px;",
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.data.gouv.fr/fr/datasets/delimitation-parcellaire-des-aoc-viticoles-de-linao/"),
+                            "Délimitation parcellaire des AOC viticoles (INAO)",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://public.opendatasoft.com/explore/dataset/correspondance-code-insee-code-postal/table/?flg=fr-fr"),
+                            "Correspondance code INSEE - code postal",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://public.opendatasoft.com/explore/dataset/donnees-synop-essentielles-omm/table/?flg=fr-fr&sort=date"),
+                            "Données synop essentielles OMM",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    )
+                ),
+                p(
+                    "Nos 3 sources de données :",
+                    tags$ul(
+                        tags$li("La 1ère source permet d'avoir la localisation des vignobles. Cette localisation comporte un code INSEE et pas de code postal."),
+                        tags$li("La 2ème source permet d'imputer à chaque exploitation son code postal correspondant."),
+                        tags$li("La 3ème source comporte les données météorologiques (ici ce sont les températures qui nous intéressent).")
+                    ),
+                    style = "color: #6D071A; margin: 0;"
+                )
+            ),
+
+            # Encarts en haut à droite : Assurances
+            div(
+                style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px;",
+                h3("Assurances", style = "color: #6D071A; margin-top: 0; margin-bottom: 20px;"),
+                tags$ul(
+                    style = "list-style-type: none; padding-left: 0; margin-bottom: 0;",
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://agriculture.gouv.fr/la-reforme-de-lassurance-recolte"),
+                            "La réforme de l'assurance récolte - Ministère de l'Agriculture",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.agis-group.com/project/assurance-parametrique/"),
+                            "AGIS Group - Assurance paramétrique",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://blog.isagri.fr/assurance-gel-laquelle-choisir-vigne-agriculture"),
+                            "ISAGRI - Quelle assurance gel choisir ?",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.vitisphere.com/actualite-98168--le-point-sur-les-nouvelles-regles-de-lassurance-recolte.html"),
+                            "Vitisphere - Les nouvelles règles de l'assurance récolte",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    )
+                )
+            ),
+
+            # Encarts ligne 2
+            # Encarts en bas à gauche : Documentation technique
+            div(
+                style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px;",
+                h3("Documentation technique", style = "color: #6D071A; margin-top: 0; margin-bottom: 20px;"),
+                tags$ul(
+                    style = "list-style-type: none; padding-left: 0;",
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.vignevin.com/wp-content/uploads/2019/03/Cahier_Itineraire_n___27_-_Gel_et_Grele_-_VF_BD-1.pdf"),
+                            "Vignevin - Cahier Itinéraire : Gel et Grêle",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.franceagrimer.fr/fam/content/download/59532/document/05%20-%20CS%2023%20janv%2019%20-%20IFV%20protection%20gel%20grele.pdf?version=1"),
+                            "FranceAgriMer - Protection contre le gel et la grêle",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.sillonbelge.be/7453/article/2021-04-30/quel-comportement-de-developpement-adoptent-les-rameaux-de-la-vigne-apres-une"),
+                            "Sillon Belge - Développement des rameaux après le gel",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    ),
+                    tags$li(
+                        tags$button(
+                            onclick = sprintf("window.open('%s', '_blank')", "https://www.institut-rhodanien.com/upload/article/file/202110ensavoirplusgel-61e832af4fa02.pdf"),
+                            "Institut Rhodanien - En savoir plus sur le gel",
+                            style = "background: none; border: none; color: #6D071A; text-decoration: none; border-bottom: 1px solid #6D071A; cursor: pointer; padding: 0; font-size: 1em; text-align: left;"
+                        )
+                    )
+                )
+            ),
+
+            # Encarts en bas à droite : Auteurs
+            div(
+                style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px;",
+                h3("Auteurs", style = "color: #6D071A; margin-top: 0; margin-bottom: 20px;"),
+                tags$ul(
+                    style = "list-style-type: none; padding-left: 0;",
+                    tags$li("Julie Morel-Le Guyader"),
+                    tags$li("Emma Djibril-Omar"),
+                    tags$li("Solène Wendling"),
+                    tags$li("Florian Amiel")
+                ),
+                p(
+                    "Ce dashboard a été réalisé dans le cadre d'un projet d'études de Master 2 à l'ISUP (Université de la Sorbonne).",
+                    style = "color: black; margin: 0;"
+                )
+            )
+        )
+    )
+}
+
+
+
+})
+
+
+
+# Affichage du contenu principal
+uiOutput("main_content")
+```
+
+```{r renderers}
+# Renderers pour les cartes et graphiques
+
+#################################################
+# CARTE NATIONALE
+#################################################
+
+output$map_national <- renderLeaflet({
+
+  leaflet(data_coord) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addCircleMarkers(
+      ~longitude, ~latitude,
+      color = ~case_when(
+        type_vin_principal == "Blanc" ~ "#FFE5B4",   # beige
+        type_vin_principal == "Rouge" ~ "#6D071A",   # bordeaux
+        type_vin_principal == "Rosé"  ~ "#FFB6C1",   # rose
+        TRUE                ~ "#808080"    # gris
+      ),
+      fillColor = ~case_when(
+        type_vin_principal == "Blanc" ~ "#FFE5B4",
+        type_vin_principal == "Rouge" ~ "#6D071A",
+        type_vin_principal == "Rosé"  ~ "#FFB6C1",
+        TRUE                ~ "#808080"
+      ),
+      fillOpacity = 0.8,
+      stroke = FALSE,
+      radius = 5,
+      popup = ~paste(
+        "<b>Appellation:</b>", app, "<br>",
+        "<b>Type:</b>", type_vin_principal, "<br>",
+        "<b>Région:</b>", Région
+      )
+    ) %>%
+    setView(lng = 2.5, lat = 46.5, zoom = 6) %>%
+    addLegend(
+      position = "bottomright",
+      colors = c("#FFE5B4", "#6D071A", "#FFB6C1", "#808080"),
+      labels = c("Blanc", "Rouge", "Rosé", "Autre"),
+      title = "Types de vin"
+    )
+})
+
+#################################################
+# STAT ET CAMEMMBERT NATIONAL
+################################################# 
+
+output$total_vignobles_national <- renderText({
+  paste("Nombre total d'exploitations :", format(nrow(data_coord), big.mark = " "))
+})
+
+
+output$camembert_national <- renderPlot({
+  p <- data_coord %>%
+    count(type_vin_principal) %>%
+    ggplot(aes(x = "", y = n, fill = type_vin_principal)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    scale_fill_manual(values = wine_colors) +
+    labs(title = "Répartition des types de vins") +
+    theme_void() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 10),
+      # Ajouter de l'espace en bas pour la note
+      plot.margin = margin(t = 5, r = 5, b = 30, l = 5, unit = "pt")
+    )
+  
+  # Créer la mise en page avec la note
+  grid.arrange(
+    p,
+    textGrob(
+      "Autre = Aucune des 3 catégories\nou pas de majorité entre les 3 types", 
+      just = "center", 
+      x = 0.5, 
+      y = 0.1,
+      vjust = 0,
+      gp = gpar(fontsize = 11, fontface = "italic", col = "gray40")
+    ),
+    heights = c(0.9, 0.1),
+    nrow = 2
+  )
+}, height = 400)  # Ajuster la hauteur si nécessaire
+
+#################################################
+# CARTE REGIONALE
+#################################################
+
+output$map_region <- renderLeaflet({
+  req(input$region_select)
+  
+  region_data <- data_coord %>%
+    filter(Région == input$region_select)
+  
+  dist_tab <- table(region_data$type_vin_principal, useNA = "ifany")
+  for (line in capture.output(dist_tab)) {
+    message(line)
+  }
+  
+  center_lng <- mean(range(region_data$longitude))
+  center_lat <- mean(range(region_data$latitude))
+  
+  leaflet(region_data) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addCircleMarkers(
+      ~longitude, ~latitude,
+      color = ~color,
+      fillColor = ~color,
+      fillOpacity = 0.8,
+      stroke = FALSE,
+      radius = 5,
+      popup = ~paste("<b>Appellation:</b>", app, "<br>",
+                    "<b>Type:</b>", type_vin_principal)
+    ) %>%
+    setView(lng = center_lng, lat = center_lat, zoom = 8) %>%
+    addLegend(
+      position = "bottomright",
+      colors = unname(wine_colors),
+      labels = names(wine_colors),
+      title = "Types de vin"
+    )
+})
+
+#################################################
+# STAT ET CAMEMMBERT REGIONAL
+################################################# 
+
+output$total_vignobles_region <- renderText({
+  req(input$region_select)
+  total <- data_coord %>%
+    filter(Région == input$region_select) %>%
+    nrow()
+  paste("Nombre d'exploitations dans la région:", format(total, big.mark = " "))
+})
+
+
+output$camembert_region <- renderPlot({
+  req(input$region_select)
+  p <- data_coord %>%
+    filter(Région == input$region_select) %>%
+    count(type_vin_principal) %>%
+    ggplot(aes(x = "", y = n, fill = type_vin_principal)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    scale_fill_manual(values = wine_colors) +
+    labs(title = paste("Répartition des types de vins")) +
+    theme_void() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 10),
+      plot.margin = margin(t = 5, r = 5, b = 30, l = 5, unit = "pt")
+    )
+
+  grid.arrange(
+    p,
+    textGrob(
+      "Autre = Aucune des 3 catégories\nou pas de majorité entre les 3 types", 
+      just = "center", 
+      x = 0.5, 
+      y = 0.1,
+      vjust = 0,
+      gp = gpar(fontsize = 11, fontface = "italic", col = "gray40")
+    ),
+    heights = c(0.9, 0.1),
+    nrow = 2
+  )
+}, height = 400)
+
+#################################################
+# CARTE DEPARTEMENTALE
+################################################# 
+
+output$map_dept <- renderLeaflet({
+  req(input$dept_select)
+  
+  dept_data <- data_coord %>%
+    filter(Département == input$dept_select)
+  
+  leaflet(dept_data) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addCircleMarkers(
+      ~longitude, ~latitude,
+      color = ~color,
+      fillColor = ~color,
+      fillOpacity = 0.8,
+      stroke = FALSE,
+      radius = 5,
+      popup = ~paste("<b>Appellation:</b>", app, "<br>",
+                     "<b>Type:</b>", type_vin_principal)
+    ) %>%
+    fitBounds(
+      lng1 = min(dept_data$longitude),
+      lat1 = min(dept_data$latitude),
+      lng2 = max(dept_data$longitude),
+      lat2 = max(dept_data$latitude)
+    ) %>%
+    addLegend(
+      position = "bottomright",
+      colors = unname(wine_colors),
+      labels = names(wine_colors),
+      title = "Types de vin"
+    )
+})
+
+#################################################
+# STAT ET CAMEMBERT DEPARTEMENTALE
+################################################# 
+
+output$total_vignobles_dept <- renderText({
+  req(input$dept_select)
+  total <- data_coord %>%
+    filter(Département == input$dept_select) %>%
+    nrow()
+  paste("Nombre d'exploitations dans le département:", format(total, big.mark = " "))
+})
+
+output$camembert_dept <- renderPlot({
+  req(input$dept_select)
+  p <- data_coord %>%
+    filter(Département == input$dept_select) %>%
+    count(type_vin_principal) %>%
+    ggplot(aes(x = "", y = n, fill = type_vin_principal)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    scale_fill_manual(values = wine_colors) +
+    labs(title = paste("Répartition des types de vins")) +
+    theme_void() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 10),
+      plot.margin = margin(t = 5, r = 5, b = 30, l = 5, unit = "pt")
+    )
+
+  grid.arrange(
+    p,
+    textGrob(
+      "Autre = Aucune des 3 catégories\nou pas de majorité entre les 3 types", 
+      just = "center", 
+      x = 0.5, 
+      y = 0.1,
+      vjust = 0,
+      gp = gpar(fontsize = 11, fontface = "italic", col = "gray40")
+    ),
+    heights = c(0.9, 0.1),
+    nrow = 2
+  )
+}, height = 400)
+
+#################################################
+# fonction pour générer le mini graphique en barres
+################################################# 
+
+bar_chart <- function(value, max_value, fill) {
+  width <- paste0(min(100, value / max_value * 100), "%")
+  
+  container <- div(style = list(
+    display = "flex",
+    alignItems = "center",
+    gap = "8px"
+  ),
+  div(style = list(
+    background = fill,
+    width = width,
+    height = "20px",
+    borderRadius = "2px",
+    flexGrow = 1
+  )),
+  span(style = list(
+    flexShrink = 0,
+    fontSize = "12px"
+  ), paste0(round(value, 1), "%")))
+  
+  container
+}
+
+#################################################
+# TABLEAUX 
+################################################# 
+
+output$table_national <- renderReactable({
+  # Calcul des statistiques par région
+  national_summary <- data_coord %>%
+    group_by(Région) %>%
+    summarise(
+      nb_exploitations = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(Région) %>%
+    mutate(repartition = NA)
+
+  # Calcul des pourcentages des types de vin
+  wine_dist <- data_coord %>%
+    group_by(Région, type_vin_principal) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(Région) %>%
+    mutate(pct = n / sum(n) * 100) %>%
+    ungroup()
+
+  reactable(
+    national_summary,
+    pagination = FALSE,
+    columns = list(
+      Région = colDef(
+        name = "Région",
+        width = 180,
+        minWidth = 180
+      ),
+      nb_exploitations = colDef(
+        name = "Nombre d'exploitations",
+        width = 150,
+        minWidth = 150,
+        align = "center",
+        format = colFormat(separators = TRUE)
+      ),
+      repartition = colDef(
+        name = "Répartition des types de vins",
+        width = 500,
+        minWidth = 500,
+        cell = function(value, index) {
+          region <- national_summary$Région[index]
+          region_data <- wine_dist %>% 
+            filter(Région == region) %>%
+            arrange(match(type_vin_principal, names(wine_colors)))
+          
+          cumsum_pct <- 0
+          
+          tags$div(
+            style = "position: relative; height: 50px; padding: 10px 0;",  # Augmentation de la hauteur totale
+            tags$div(
+              style = "position: relative; height: 20px; background-color: #f0f0f0; border-radius: 4px; margin: 0 0 20px 0;",  # Ajout de marge en bas
+              lapply(seq_along(names(wine_colors)), function(i) {
+                type <- names(wine_colors)[i]
+                pct <- region_data$pct[region_data$type_vin_principal == type]
+                if (length(pct) == 0) pct <- 0
+                
+                start_pos <- cumsum_pct
+                cumsum_pct <<- cumsum_pct + pct
+                
+                border_radius <- ""
+                if(i == 1) {
+                  border_radius <- "border-top-left-radius: 4px; border-bottom-left-radius: 4px;"
+                } else if(i == length(names(wine_colors))) {
+                  border_radius <- "border-top-right-radius: 4px; border-bottom-right-radius: 4px;"
+                }
+                
+                style <- sprintf(
+                  "position: absolute; left: %f%%; width: %f%%; height: 100%%; background-color: %s; %s",
+                  start_pos,
+                  pct,
+                  wine_colors[type],
+                  border_radius
+                )
+                
+                tags$div(
+                  style = style,
+                  title = sprintf("%s: %.1f%%", type, pct)
+                )
+              })
+            ),
+            # Légende déplacée plus bas
+            tags$div(
+              style = "position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 11px;",
+              lapply(names(wine_colors), function(type) {
+                pct <- region_data$pct[region_data$type_vin_principal == type]
+                if (length(pct) == 0) pct <- 0
+                tags$span(
+                  style = sprintf("color: %s; font-weight: bold;", wine_colors[type]),
+                  sprintf("%.1f%%", pct)
+                )
+              })
+            )
+          )
+        }
+      )
+    ),
+    defaultColDef = colDef(
+      headerStyle = list(fontWeight = "bold"),
+      minWidth = 150  # Largeur minimale par défaut pour toutes les colonnes
+    ),
+    striped = TRUE,
+    bordered = TRUE,
+    theme = reactableTheme(
+      borderColor = "#dfe2e5",
+      stripedColor = "#f6f8fa",
+      cellPadding = "12px 12px",  # Augmentation du padding des cellules
+      style = list(
+        cellVerticalPadding = "1rem"  # Augmentation du padding vertical
+      )
+    ),
+    rowStyle = list(
+      minHeight = "60px"  # Hauteur minimale pour chaque ligne
+    )
+  )
+})
+
+# Renderer pour le tableau régional
+output$table_region <- renderReactable({
+  req(input$region_select)
+  
+  # Préparer les données pour le tableau régional
+  region_summary <- data_coord %>%
+    filter(Région == input$region_select) %>%
+    group_by(Département) %>%
+    summarise(
+      nb_exploitations = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(Département) %>%
+    mutate(repartition = NA)
+
+  # Calculer les pourcentages par type de vin pour chaque département
+  wine_dist <- data_coord %>%
+    filter(Région == input$region_select) %>%
+    group_by(Département, type_vin_principal) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(Département) %>%
+    mutate(pct = n / sum(n) * 100) %>%
+    ungroup()
+
+  reactable(
+    region_summary,
+    pagination = FALSE,
+    columns = list(
+      Département = colDef(
+        name = "Département",
+        width = 180,
+        minWidth = 180
+      ),
+      nb_exploitations = colDef(
+        name = "Nombre d'exploitations",
+        width = 150,
+        minWidth = 150,
+        align = "center",
+        format = colFormat(separators = TRUE)
+      ),
+      repartition = colDef(
+        name = "Répartition des types de vins",
+        width = 500,
+        minWidth = 500,
+        cell = function(value, index) {
+          dept <- region_summary$Département[index]
+          dept_data <- wine_dist %>% 
+            filter(Département == dept) %>%
+            arrange(match(type_vin_principal, names(wine_colors)))
+          
+          cumsum_pct <- 0
+          
+          tags$div(
+            style = "position: relative; height: 50px; padding: 10px 0;",
+            tags$div(
+              style = "position: relative; height: 20px; background-color: #f0f0f0; border-radius: 4px; margin: 0 0 20px 0;",
+              lapply(seq_along(names(wine_colors)), function(i) {
+                type <- names(wine_colors)[i]
+                pct <- dept_data$pct[dept_data$type_vin_principal == type]
+                if (length(pct) == 0) pct <- 0
+                
+                start_pos <- cumsum_pct
+                cumsum_pct <<- cumsum_pct + pct
+                
+                border_radius <- ""
+                if(i == 1) {
+                  border_radius <- "border-top-left-radius: 4px; border-bottom-left-radius: 4px;"
+                } else if(i == length(names(wine_colors))) {
+                  border_radius <- "border-top-right-radius: 4px; border-bottom-right-radius: 4px;"
+                }
+                
+                style <- sprintf(
+                  "position: absolute; left: %f%%; width: %f%%; height: 100%%; background-color: %s; %s",
+                  start_pos,
+                  pct,
+                  wine_colors[type],
+                  border_radius
+                )
+                
+                tags$div(
+                  style = style,
+                  title = sprintf("%s: %.1f%%", type, pct)
+                )
+              })
+            ),
+            tags$div(
+              style = "position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 11px;",
+              lapply(names(wine_colors), function(type) {
+                pct <- dept_data$pct[dept_data$type_vin_principal == type]
+                if (length(pct) == 0) pct <- 0
+                tags$span(
+                  style = sprintf("color: %s; font-weight: bold;", wine_colors[type]),
+                  sprintf("%.1f%%", pct)
+                )
+              })
+            )
+          )
+        }
+      )
+    ),
+    defaultColDef = colDef(
+      headerStyle = list(fontWeight = "bold"),
+      minWidth = 150
+    ),
+    striped = TRUE,
+    bordered = TRUE,
+    theme = reactableTheme(
+      borderColor = "#dfe2e5",
+      stripedColor = "#f6f8fa",
+      cellPadding = "12px 12px",
+      style = list(
+        cellVerticalPadding = "1rem"
+      )
+    ),
+    rowStyle = list(
+      minHeight = "60px"
+    )
+  )
+})
+
+# Contrôles de la carte
+output$map_controls <- renderUI({
+  div(
+    style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px;",
+    div(
+      radioButtons(
+        "view_type",
+        "Type de vue :",
+        choices = c("Localisation" = "localisation", "Intensité" = "intensite"),
+        selected = "localisation",
+        inline = TRUE
+      )
+    ),
+    conditionalPanel(
+      condition = "input.view_type == 'intensite'",
+      div(
+        style = "margin-top: 15px;",
+        div(
+          style = "display: flex; gap: 20px; flex-wrap: wrap;",
+          selectInput(
+            "month_select",
+            "Mois :",
+            choices = c("Mars" = 3, "Avril" = 4, "Mai" = 5),
+            selected = selected_month()
+          ),
+          div(
+            checkboxGroupInput(
+              "selected_years",
+              "Années :",
+              choices = years_available,
+              selected = years_available[1],
+              inline = TRUE
+            )
+          )
+        ),
+        p(
+          style = "text-align: justify; margin-top: 10px; font-size: 0.9em; font-style: italic; color: #666;",
+          "Si plusieurs années sont sélectionnées, la moyenne du nb de jour de gel est visualisée"
+        )
+      )
+    ),
+    conditionalPanel(
+      condition = "input.view_type == 'localisation'",
+      div(
+        style = "margin-top: 15px;",
+        p(
+          style = "text-align: justify; margin-bottom: 15px; font-weight: bold;",
+          "Voici la localisation de toutes les stations météo relevant les températures :"
+        ),
+        p(
+          style = "text-align: justify; margin-bottom: 0;",
+          "Cliquez sur une station pour visualiser l'évolution des températures minimales."
+        )
+      )
+    )
+  )
+})
+
+########################################
+# Carte des stations météo
+########################################
+
+output$map_stations <- renderLeaflet({
+  base_map <- leaflet() %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    fitBounds(
+      lng1 = -5, lat1 = 41,
+      lng2 = 10, lat2 = 52
+    )
+  
+  if(input$view_type == "localisation") {
+    base_map %>%
+      addCircleMarkers(
+        data = data_coord_stations,
+        lng = ~Longitude, 
+        lat = ~Latitude,
+        color = "#6D071A",
+        fillColor = "#6D071A",
+        fillOpacity = 0.8,
+        stroke = FALSE,
+        radius = 5,
+        layerId = ~`ID OMM station`,
+        popup = ~paste(
+          "<b>Nom:</b>", Nom, "<br>",
+          "<b>Station:</b>", `ID OMM station`
+        )
+      )
+  } else {
+    # Vue intensité reste exactement la même qu'avant
+    intensity_data <- data_intensite %>%
+      filter(
+        mois == as.numeric(input$month_select),
+        annee %in% input$selected_years
+      ) %>%
+      group_by(`ID OMM station`, Longitude, Latitude, Nom) %>%
+      summarise(
+        temp_min = mean(temp_min, na.rm = TRUE),
+        nb_jour_gel = mean(nb_jour_gel, na.rm = TRUE),
+        .groups = "drop"
+      )
+  
+    pal <- colorNumeric(
+      palette = rev(colorRampPalette(colors = brewer.pal(9, "YlGnBu"))(256)),
+      domain = c(-9, 13)
+    )
+  
+    radius_scale <- function(x) {
+      5 + (x * 1.5)
+    }
+  
+    base_map %>%
+      addCircleMarkers(
+        data = intensity_data,
+        lng = ~Longitude, 
+        lat = ~Latitude,
+        color = ~pal(temp_min),
+        fillColor = ~pal(temp_min),
+        fillOpacity = 0.8,
+        stroke = FALSE,  
+        radius = ~radius_scale(nb_jour_gel),
+        popup = ~paste(
+          "<b>Nom:</b>", Nom, "<br>",
+          "<b>Station:</b>", `ID OMM station`, "<br>",
+          "<b>Température min moyenne:</b>", round(temp_min, 1), "°C<br>",
+          "<b>Moyenne jours de gel:</b>", round(nb_jour_gel, 1), " jours/an<br>",
+          "<b>Années sélectionnées:</b>", paste(sort(input$selected_years), collapse = ", ")
+        )
+      ) %>%
+      addLegend(
+        position = "bottomright",
+        pal = pal,
+        values = c(-9, 13),
+        title = "Température minimale (°C)",
+        opacity = 0.8
+      ) %>%
+      addControl(
+        position = "bottomleft",
+        html = paste0(
+          "<div><strong>Taille des cercles (jours de gel)</strong></div>",
+          "<div style='margin: 5px 0;'><div style='width: 10px; height: 10px; background: black; border-radius: 50%; display: inline-block; margin-right: 5px;'></div>0 jours</div>",
+          "<div style='margin: 5px 0;'><div style='width: 20px; height: 20px; background: black; border-radius: 50%; display: inline-block; margin-right: 5px;'></div>10 jours</div>",
+          "<div style='margin: 5px 0;'><div style='width: 30px; height: 30px; background: black; border-radius: 50%; display: inline-block; margin-right: 5px;'></div>20 jours</div>"
+        )
+      )
+  }
+})
+
+
+# L'observateur de clic reste le même
+observeEvent(input$map_stations_marker_click, {
+  selected_station(input$map_stations_marker_click$id)
+})
+
+#######################################
+# les infos de la station
+#######################################
+
+output$station_info <- renderUI({
+  req(selected_station())
+  
+  # Récupérer les informations de la station
+  station_info <- data_coord_stations %>%
+    filter(`ID OMM station` == selected_station()) %>%
+    slice(1)  
+    
+  div(
+    style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin: 20px 0;",
+    p(
+      style = "color: #6D071A; margin: 0; font-size: 16px; text-align: center;",
+      sprintf("Station : %s - ID : %s", station_info$Nom, station_info$`ID OMM station`)
+    )
+  )
+})
+
+#######################################
+# tableaux nombres jours de gel
+#######################################
+
+output$frost_tables <- renderUI({
+  req(input$view_type == "localisation")
+  req(selected_station())
+  
+  # Filtrer les données pour la station sélectionnée
+  station_frost_data <- data_intensite %>%
+    filter(
+      `ID OMM station` == selected_station(),
+      mois %in% c(3, 4, 5)
+    )
+  
+  # Créer les trois tableaux
+  div(
+    style = "background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; margin: 20px 0;",
+    div(
+      style = "display: flex; justify-content: space-around; gap: 20px;",
+      
+      # Un div pour chaque mois
+      lapply(c(3, 4, 5), function(m) {
+        mois_name <- switch(as.character(m),
+                           "3" = "Mars",
+                           "4" = "Avril",
+                           "5" = "Mai")
+        
+        mois_data <- station_frost_data %>%
+          filter(mois == m) %>%
+          arrange(annee)
+        
+        div(
+          style = "flex: 1; background-color: rgb(242, 233, 235); padding: 15px; border-radius: 5px; min-width: 150px;",
+          # Titre du mois
+          h4(
+            style = "text-align: center; margin-top: 0; color: #6D071A; margin-bottom: 10px; font-weight: bold;",
+            mois_name
+          ),
+          # Tableau
+          tags$table(
+            style = "width: 100%; border-collapse: collapse; background-color: white; border-radius: 5px;",
+            tags$thead(
+              tags$tr(
+                tags$th(
+                  style = "padding: 8px; border-bottom: 2px solid #6D071A; text-align: center; color: #6D071A;",
+                  "Année"
+                ),
+                tags$th(
+                  style = "padding: 8px; border-bottom: 2px solid #6D071A; text-align: center; color: #6D071A;",
+                  "Jours de gel"
+                )
+              )
+            ),
+            tags$tbody(
+              lapply(1:nrow(mois_data), function(i) {
+                tags$tr(
+                  style = if(i %% 2 == 0) "background-color: rgb(242, 233, 235);" else "background-color: white;",
+                  tags$td(
+                    style = "padding: 8px; text-align: center; border-bottom: 1px solid #dee2e6;",
+                    mois_data$annee[i]
+                  ),
+                  tags$td(
+                    style = "padding: 8px; text-align: center; border-bottom: 1px solid #dee2e6;",
+                    mois_data$nb_jour_gel[i]
+                  )
+                )
+              })
+            )
+          )
+        )
+      })
+    )
+  )
+})
+
+#######################################
+# Ajouter le rendu du graphique
+#######################################
+
+output$station_temp_plot <- renderPlot({
+  req(selected_station())
+  
+  station_data <- data_degres %>%
+    filter(
+      `ID OMM station` == selected_station(),
+      mois %in% c(3, 4, 5)
+    ) %>%
+    mutate(
+      date_std = as.Date(paste0("2000-", format(Date, "%m-%d")))
+    )
+  
+  stats_data <- station_data %>%
+    group_by(date_std) %>%
+    summarise(
+      mean_temp = mean(temp_min),
+      min_temp = min(temp_min),
+      max_temp = max(temp_min),
+      .groups = "drop"
+    )
+  
+  ggplot() +
+    geom_ribbon(data = stats_data,
+                aes(x = date_std, ymin = min_temp, ymax = max_temp),
+                fill = "#FF000033",
+                alpha = 0.2) +
+    geom_line(data = station_data,
+              aes(x = date_std, y = temp_min, group = annee),
+              color = "#FF000022",
+              linewidth = 0.5) +
+    geom_line(data = stats_data,
+              aes(x = date_std, y = mean_temp),
+              color = "#6D071A",
+              linewidth = 1.2) +
+    geom_hline(yintercept = 0,
+               linetype = "dashed",
+               color = "blue",
+               linewidth = 0.8) +
+    scale_x_date(
+      date_breaks = "1 month",
+      date_labels = "%B",
+      expand = c(0.02, 0.02)
+    ) +
+    labs(
+      title = "Évolution des températures minimales journalières de 2019 à 2023",
+      subtitle = "Ligne brodeaux : moyenne, zone colorée : valeurs extrêmes",
+      x = "Mois",
+      y = "Température minimale (°C)"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, color = "grey40"),
+      legend.position = "none",
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 10),
+      axis.title = element_text(size = 12),
+      axis.text.x = element_text(angle = 0, hjust = 0.5)
+    )
+}, height = 400)
+
+##############################
+# Rendu des cartes
+##############################
+
+output$frost_maps <- renderUI({
+  req(input$region_temp, input$years_temp)
+  
+  tagList(
+    # Container pour la carte et le graphique des stations
+    div(
+      style = "display: flex; justify-content: center; padding: 20px;",
+      div(
+        style = "flex: 1; position: relative;",
+        leafletOutput("map_stations", height = "500px"),
+        plotOutput("station_temp_plot")  # Ajouter le graphique sous la carte
+      )
+    ),
+    
+    lapply(input$years_temp, function(year) {
+      tagList(
+        h3(sprintf("Année %s", year)),
+        fluidRow(
+          column(4, leafletOutput(sprintf("map_march_%s", year), height = "400px")),
+          column(4, leafletOutput(sprintf("map_april_%s", year), height = "400px")),
+          column(4, leafletOutput(sprintf("map_may_%s", year), height = "400px"))
+        )
+      )
+    })
+  )
+})
+
+#########################################
+# Carte des exploitations températures
+#########################################
+
+output$map_exploitations <- renderLeaflet({
+  req(input$month_select_exploit)
+  req(input$selected_years_exploit)
+  
+  # Filtrer les données selon la zone sélectionnée
+  exploit_data <- if (input$zone_select == "France") {
+    data_coord
+  } else {
+    data_coord %>% filter(Région == input$zone_select)
+  }
+
+  # Construire les noms de colonnes pour les années/mois sélectionnés
+  selected_cols <- crossing(
+    year = input$selected_years_exploit,
+    month = input$month_select_exploit
+  ) %>%
+    mutate(col_name = paste0("jours_gel_", year, "_mois_", month))
+
+  # Définir les bornes fixes pour le domaine
+    frost_days_min <- 0
+    frost_days_max <- 13
+    
+  # Créer une palette de couleurs pour les jours de gel avec une échelle fixe
+    pal <- colorNumeric(
+      palette = colorRampPalette(colors = brewer.pal(9, "YlGnBu"))(256),
+      domain = c(frost_days_min, frost_days_max) # Domaine constant de 0 à 12
+    )
+      
+  # Calculer la moyenne des jours de gel pour les années sélectionnées
+    exploit_data$frost_days <- rowMeans(
+      sapply(selected_cols$col_name, function(col) exploit_data[[col]]),
+      na.rm = TRUE
+    )
+    
+  # Créer la carte avec une échelle constante
+    leaflet(exploit_data) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      addCircleMarkers(
+        ~longitude, ~latitude,
+        color = ~pal(frost_days),
+        fillColor = ~pal(frost_days),
+        fillOpacity = 0.8,
+        stroke = FALSE,
+        radius = 5,
+        popup = ~paste(
+          "<b>Appellation:</b>", app, "<br>",
+          "<b>Type:</b>", type_vin_principal, "<br>",
+          "<b>Région:</b>", Région, "<br>",
+          "<b>Département:</b>", Département, "<br>",
+          "<b>Jours de gel:</b>", round(frost_days, 1)
+        )
+      ) %>%
+      addLegend(
+        position = "bottomright",
+        pal = pal,
+        values = c(frost_days_min, frost_days_max), # Domaine constant pour la légende
+        title = "Nombre de jours de gel",
+        labFormat = labelFormat(transform = function(x) x), # Labels fixes
+        opacity = 1 # Légende toujours visible
+      ) %>%
+      {
+        if (input$zone_select != "France") {
+          reg_data <- exploit_data
+          fitBounds(
+            ., 
+            lng1 = min(reg_data$longitude),
+            lat1 = min(reg_data$latitude),
+            lng2 = max(reg_data$longitude),
+            lat2 = max(reg_data$latitude)
+          )
+        } else {
+          fitBounds(
+            .,
+            lng1 = -5,
+            lat1 = 41,
+            lng2 = 10,
+            lat2 = 52
+          )
+        }
+      }
+
+})
+
+
+
+
+# Section "Votre Exploitation"
+
+########################################
+# RENDERERS POUR LES 2 SELECTEURS
+########################################
+
+# 1) Choix du Code postal
+output$select_cp <- renderUI({
+  selectizeInput(
+    "cp_input",
+    label = HTML("<b>Code Postal :</b>"),
+    choices = sort(unique(data_vignes$`Code Postal`)),
+    selected = NULL,  # on ne force aucune sélection
+    options = list(placeholder = "Saisissez et/ou sélectionnez votre code postal"),
+    width = "100%"
+  )
+})
+
+# 2) Choix de la Commune
+output$select_commune <- renderUI({
+  req(input$cp_input)  # attend que cp_input soit défini
+  
+  communes_disponibles <- data_vignes %>%
+    filter(`Code Postal` == input$cp_input) %>%
+    pull(Commune) %>%
+    unique()
+  
+  selectInput(
+    "commune_input",
+    label = HTML("<b>Commune :</b>"),
+    choices = sort(communes_disponibles),
+    selected = NULL,  # remet à vide quand CP change
+    width = "100%"
+  )
+})
+
+########################################
+# AFFICHAGE DES INFORMATIONS
+########################################
+output$exploitation_info <- renderUI({
+  req(input$cp_input, input$commune_input)
+  
+  # Filtrer la ligne correspondant au CP et à la commune
+  exploitation <- data_vignes %>%
+    filter(
+      `Code Postal` == input$cp_input,
+      Commune == input$commune_input
+    )
+  
+  # S'il n'y a pas de ligne, on n'affiche rien
+  if (nrow(exploitation) == 0) {
+    return(NULL)
+  }
+  
+  # Ajouter des messages de débogage
+  cat("Type de vin principal:", exploitation$type_vin_principal[1], "\n")
+  
+  # Années à considérer
+  annees <- c(2019, 2020, 2021, 2022, 2023)
+  
+  # Trouver les colonnes de jours de gel pour les années et mois à risque
+  find_max_gel_days <- function(annee, mois) {
+    colonnes <- paste0("jours_gel_", annee, "_mois_", mois)
+    max(unlist(exploitation[, colonnes]), na.rm = TRUE)
+  }
+  
+  # Déterminer les mois à risque en fonction du type de vin principal
+  mois_risque <- if (exploitation$type_vin_principal[1] == "Blanc") {
+    c(3, 4)
+  } else if (exploitation$type_vin_principal[1] == "Rouge") {
+    c(4, 5)
+  } else if (exploitation$type_vin_principal[1] == "Rosé") {
+    c(3, 4, 5)
+  } else {
+    c(3, 4, 5)
+  }
+  
+  # Calculer le maximum de jours de gel pour toutes les années sur les mois à risque
+  max_jours_gel <- max(sapply(annees, function(annee) find_max_gel_days(annee, mois_risque)), na.rm = TRUE)
+  
+  # Calcul de l'indice de risque
+  indice <- if (max_jours_gel == 0) {
+    0
+  } else if (max_jours_gel > 0 && max_jours_gel < 2) {
+    1
+  } else if (max_jours_gel >= 2 && max_jours_gel < 4) {
+    2
+  } else if (max_jours_gel >= 4 && max_jours_gel < 6) {
+    3
+  } else if (max_jours_gel >= 6 && max_jours_gel < 8) {
+    4
+  } else {
+    5
+  }
+  
+  # Sinon, on prend la première ligne (ou unique) pour afficher
+  div(
+    style = "background-color: white; 
+             border-radius: 8px; 
+             box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+             padding: 20px; 
+             margin-bottom: 20px;",
+    h4(
+      style = "color: #6D071A; margin-top: 0; margin-bottom: 15px; font-weight: bold;",
+      "Votre exploitation"
+    ),
+    
+    # Code postal
+    p(tags$strong("Code Postal : "), exploitation$`Code Postal`[1]),
+    
+    # Commune
+    p(tags$strong("Commune : "), exploitation$Commune[1]),
+    
+    # Appellation
+    p(tags$strong("Appellation : "), exploitation$app[1]),
+    
+    # Type de vin
+    p(tags$strong("Type de vin : "), exploitation$type_vin_principal[1]),
+    
+    # Période à risque
+    div(
+      style = "background-color: rgb(242, 233, 235); 
+               padding: 15px; 
+               border-radius: 5px; 
+               margin-top: 15px;",
+      p(
+        style = "margin: 0;",
+        tags$strong("Période à risque : "),
+        case_when(
+          exploitation$type_vin_principal[1] == "Blanc" ~ "mars et avril",
+          exploitation$type_vin_principal[1] == "Rouge" ~ "avril et mai",
+          exploitation$type_vin_principal[1] == "Rosé"  ~ "mars, avril et mai",
+          TRUE                                ~ "mars, avril et mai"
+        )
+      ),
+      if (exploitation$type_vin_principal[1] == "Autre") {
+        p(
+          style = "font-style: italic; margin: 5px 0 0 0; color: #666;",
+          "(vous avez plusieurs types de vin)"
+        )
+      }
+    ),
+     # Indice de risque (nouveau bloc)
+    div(
+      style = "background-color: rgb(242, 233, 235); 
+               padding: 15px; 
+               border-radius: 5px; 
+               margin-top: 15px;",
+      p(
+        style = "margin: 0;",
+        tags$strong("INDICE DE RISQUE* = "),
+        tags$strong(indice)
+      ),
+      p(
+        style = "font-style: italic; font-size: 0.8em; color: #333; margin: 5px 0 0 0;",
+        "* voir en bas pour explications de l'indice"
+      )
+    )
+  )
+})
+
+########################################
+# CARTE "exploitation_map"
+########################################
+output$exploitation_map <- renderLeaflet({
+  req(input$cp_input, input$commune_input)
+  
+  # Récupérer l'exploitation
+  exploitation_select <- data_vignes %>%
+    filter(
+      `Code Postal` == input$cp_input,
+      Commune == input$commune_input
+    )
+
+  # S'il n'y a aucune ligne, on n'affiche rien
+  if (nrow(exploitation_select) == 0) {
+    # Retourne une carte vide ou NULL
+    return(leaflet() %>% addTiles())
+  }
+
+  # Récupérer les exploitations de la même région, si vous voulez en gris
+  exploitations_region <- data_vignes %>%
+    filter(Région == exploitation_select$Région[1])
+  
+  # Créer la carte
+  leaflet() %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    
+    # 1) Exploitations de la région en gris
+    addCircleMarkers(
+      data = exploitations_region,
+      lng = ~longitude,
+      lat = ~latitude,
+      radius = 5,
+      color = "#808080",
+      fillColor = "#808080",
+      weight = 1,
+      opacity = 0.8,
+      fillOpacity = 0.5
+    ) %>%
+    
+    # 2) Exploitation sélectionnée en bordeaux
+    addCircleMarkers(
+      data = exploitation_select,
+      lng = ~longitude,
+      lat = ~latitude,
+      radius = 8,
+      color = "#6D071A",
+      fillColor = "#6D071A",
+      weight = 2,
+      opacity = 1,
+      fillOpacity = 0.8,
+      popup = ~paste("<b>Appellation:</b>", app, "<br>",
+                     "<b>Type de vin:</b>", type_vin_principal)
+    ) %>%
+    
+    # Centrer la vue
+    setView(
+      lng = exploitation_select$longitude[1],
+      lat = exploitation_select$latitude[1],
+      zoom = 9
+    )
+})
+
+
+#################################################
+# DIAGRAMME EN BARRES  NB JOUR GEL EXPLOITATION
+#################################################
+
+output$exploitation_barplot <- renderPlot({
+  req(input$cp_input, input$commune_input)
+  
+  # 1) Récupérer la première ligne correspondant à ce CP + Commune
+  exploitation <- data_vignes %>%
+    filter(`Code Postal` == input$cp_input,
+           Commune == input$commune_input) %>%
+    slice(1)
+  
+  # Si pas de ligne, on n'affiche rien
+  if (nrow(exploitation) == 0) return(NULL)
+  
+  # 2) Directement faire le pivot (pivot_longer) puis tracer
+  exploitation %>%
+    pivot_longer(
+      cols = matches("^jours_gel_\\d+_mois_\\d+$"),  # toutes les colonnes "jours_gel_XXXX_mois_YY"
+      names_to = c("x1","annee","x2","mois"),
+      names_pattern = "(jours_gel)_(\\d+)_(mois)_(\\d+)",
+      values_to = "nb_jours_gel"
+    ) %>%
+    mutate(
+      # annee et mois en numériques
+      annee = as.integer(annee),
+      mois  = as.integer(mois)
+    ) %>%
+    # filtrer 2019..2023 et mois 3..5 (si besoin)
+    filter(annee %in% 2019:2023, mois %in% c(3,4,5)) %>%
+    mutate(
+      # transformer en facteurs ordonnés
+      annee = factor(annee, levels = 2019:2023),
+      mois  = factor(mois, levels = c(3,4,5), labels = c("Mars","Avril","Mai"))
+    ) %>%
+    ggplot(aes(x = annee, y = nb_jours_gel, fill = mois)) +
+      # 3) Diagramme en barres groupées
+      geom_col(position = position_dodge(width = 0.9)) +
+      # Ajouter les valeurs sur chaque barre
+      geom_text(aes(label = sprintf("%.1f", nb_jours_gel), y = nb_jours_gel + 0.1),
+      position = position_dodge(width = 0.8),
+      vjust = -0.5, size = 4) +
+      # Changer les couleurs avec le dégradé YlGnBu
+      scale_fill_manual(values = c("#2c7fb8","#41b6c4","#a1dab4")) +
+      labs(
+        title = "Évolution du nombre de jours de gel (mars, avril, mai)",
+        subtitle = "De 2019 à 2023 pour l'exploitation sélectionnée",
+        x = "Année",
+        y = "Nombre de jours de gel",
+        fill = "Mois"
+      ) +
+      theme_minimal() +
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, color = "grey40"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 14)
+      )
+})
+```
+
+
+
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
