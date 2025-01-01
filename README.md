@@ -14,6 +14,6 @@ https://public.opendatasoft.com/explore/dataset/correspondance-code-insee-code-p
 Pour ce projet, nous avons dans un premier temps travaillé les données publiques et obtenu 4 sous fichiers excel.
 Ceci permet au dashboard de se charger plus rapidement.
 
-La prépration des données a ajouté la notion "type de vin" (Rouge, Blanc, Rosé, Autre) à nos exploitations.
+La préparation des données a ajouté la notion "type de vin" (Rouge, Blanc, Rosé, Autre) à nos exploitations.
 "Autre" est utilisé pour les vins qui ne rentrent dans aucune des catégories précédentes.
 Mais également lorsqu'une exploitation comporte plusieurs types, nous avons gardé l'information du type majoritaire, sans majorité, le type est classé dans "Autre".
